@@ -12,6 +12,9 @@ from collections.abc import AsyncIterator
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage
 
+from minion.agent.agent import AgentDeps
+from minion.memory.manager import MemoryManager
+
 
 class Session:
     """
@@ -21,8 +24,9 @@ class Session:
     each call. The Session owns that list so the TUI doesn't have to.
     """
 
-    def __init__(self, agent: Agent[None, str]) -> None:
+    def __init__(self, agent: Agent[AgentDeps, str], memory: MemoryManager) -> None:
         self._agent = agent
+        self._memory = memory
         self._history: list[ModelMessage] = []
 
     async def stream(self, user_message: str) -> AsyncIterator[str]:
@@ -30,8 +34,10 @@ class Session:
         Send a user message and yield streamed text chunks.
         Updates internal history after the response completes.
         """
+        deps = AgentDeps(memory=self._memory)
         async with self._agent.run_stream(
             user_message,
+            deps=deps,
             message_history=self._history,
         ) as streamed:
             async for chunk in streamed.stream_text(delta=True):

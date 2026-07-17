@@ -56,7 +56,13 @@ class LLMProvider(Protocol):
 
 ### Memory (`minion/memory/`)
 
-SQLite with FTS5 (full-text search). Memories are typed:
+SQLite with FTS5 (full-text search). Three layers:
+
+- **`store.py`** — raw SQLite CRUD. Synchronous. Owns the connection, schema, and FTS5 triggers.
+- **`manager.py`** — async wrapper around the store. What the agent tools call.
+- **`models.py`** — `Memory` Pydantic model and `MemoryType` enum.
+
+Memory types:
 
 | Type | Example |
 |---|---|
@@ -65,9 +71,9 @@ SQLite with FTS5 (full-text search). Memories are typed:
 | `project` | "Working on a Rust CLI called fenix" |
 | `context` | "Currently learning Neovim" |
 
-The agent has `remember` and `recall` tools. It decides when to store and retrieve memories based on the system prompt. The DB is a single file at `~/.minion/minion.db` — inspectable with any SQLite viewer.
+The agent has four memory tools: `store_memory`, `recall_memories`, `forget_memory`, `update_memory`. The system prompt instructs it to recall relevant memories before every response and store new information proactively. The DB is a single file at `~/.minion/minion.db` — inspectable with any SQLite viewer.
 
-**Why not vector search?** For hundreds of personal memories, SQLite FTS5 gives good recall with zero additional dependencies. Vector embeddings can be layered in later as an additional recall path without changing the store interface.
+**Why not vector search?** For hundreds of personal memories, SQLite FTS5 gives good recall with zero additional dependencies. FTS5 uses prefix matching (`"term"*`) so partial words resolve correctly. Vector embeddings can be layered in later as an additional recall path without changing the store interface.
 
 ### Tools (`minion/tools/`)
 
@@ -75,7 +81,7 @@ Each tool is a module with a clear interface. Tools are registered with the agen
 
 | Tool | Module | Status |
 |---|---|---|
-| `remember` / `recall` | `memory/` | Milestone 2 |
+| `store_memory`, `recall_memories`, `forget_memory`, `update_memory` | `memory/` | done |
 | `web_search` | `tools/search.py` | Milestone 3 |
 | `file_read`, `file_write`, `list_dir` | `tools/filesystem.py` | Milestone 4 |
 | `shell_exec` | `tools/shell.py` | Milestone 4 |

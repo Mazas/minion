@@ -107,14 +107,23 @@ class StatusBar(Widget):
         super().__init__()
         self._model_name = model_name
         self._status = "ready"
+        self._info = ""
 
     def compose(self) -> ComposeResult:
         yield Static(f" {self._model_name}", classes="model", id="status-model")
         yield Static("", classes="info", id="status-info")
 
+    def _render_info(self) -> None:
+        parts = [p for p in [self._info, self._status] if p]
+        self.query_one("#status-info", Static).update("  ".join(parts) + " ")
+
     def set_status(self, status: str) -> None:
         self._status = status
-        self.query_one("#status-info", Static).update(status)
+        self._render_info()
+
+    def set_info(self, info: str) -> None:
+        self._info = info
+        self._render_info()
 
     def set_model(self, model_name: str) -> None:
         self._model_name = model_name

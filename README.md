@@ -6,16 +6,16 @@ Minion runs a local LLM via Ollama, remembers things about you across sessions, 
 
 ```
 ┌─────────────────────────────────────────────┐
-│  minion                        qwen2.5:3b   │
+│  minion                          qwen3:8b   │
 ├─────────────────────────────────────────────┤
 │                                             │
 │  You: I prefer terminal apps over web UIs   │
 │                                             │
 │  Minion: Got it — I'll keep that in mind.   │
-│  [memory stored]                            │
 │                                             │
 ├─────────────────────────────────────────────┤
 │ > ________________________________________  │
+│  qwen3:8b                 3 memories  ready │
 └─────────────────────────────────────────────┘
 ```
 
@@ -33,7 +33,7 @@ Minion runs a local LLM via Ollama, remembers things about you across sessions, 
 minion/
 ├── agent/      # PydanticAI agent + session management
 ├── llm/        # Ollama provider (cloud providers optional later)
-├── memory/     # SQLite-backed memory store with FTS search
+├── memory/     # SQLite-backed memory store with FTS5 search
 ├── tools/      # web search, filesystem, shell, git
 └── tui/        # Textual TUI (chat pane + input + status bar)
 ```
@@ -54,11 +54,9 @@ minion/
 
 ## Quick Start
 
-> Not yet implemented — see roadmap below.
-
 ```bash
 # Pull a model
-ollama pull qwen2.5:3b
+ollama pull qwen3:8b
 
 # Install and run
 uv sync
@@ -70,16 +68,29 @@ uv run minion
 Copy `.env.example` to `~/.minion/.env` and adjust as needed.
 
 ```env
-MINION_MODEL=qwen2.5:3b
-MINION_OLLAMA_BASE_URL=http://localhost:11434
+MINION_MODEL=qwen3:8b
+MINION_OLLAMA_BASE_URL=http://localhost:11434/v1
 MINION_DATA_DIR=~/.minion
 ```
+
+## Memory
+
+Minion remembers things about you across sessions. It stores four types of memories:
+
+| Type | Example |
+|---|---|
+| `fact` | "User's name is Alex" |
+| `preference` | "Prefers terminal apps over web UIs" |
+| `project` | "Working on a Rust CLI called fenix" |
+| `context` | "Currently learning Neovim" |
+
+Memories are stored in `~/.minion/minion.db` — a plain SQLite file you can inspect, export, or delete. The status bar shows your current memory count. The agent recalls relevant memories automatically before each response.
 
 ## Roadmap
 
 - [x] Repository setup
-- [ ] **Milestone 1** — Project scaffold + Textual TUI + basic Ollama chat
-- [ ] **Milestone 2** — Persistent memory (SQLite + FTS5)
+- [x] **Milestone 1** — Project scaffold + Textual TUI + basic Ollama chat
+- [x] **Milestone 2** — Persistent memory (SQLite + FTS5)
 - [ ] **Milestone 3** — Web search tool (DuckDuckGo)
 - [ ] **Milestone 4** — Filesystem + shell tools
 - [ ] **Milestone 5** — Git tool + session history + TUI polish
@@ -91,8 +102,7 @@ All app data is stored in `~/.minion/`:
 ```
 ~/.minion/
 ├── .env          # local config overrides
-├── minion.db     # SQLite database (memory + session history)
-└── logs/         # optional debug logs
+└── minion.db     # SQLite database (memories + session history)
 ```
 
 Nothing is sent to the cloud unless you explicitly configure a cloud model provider.
