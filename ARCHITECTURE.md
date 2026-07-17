@@ -79,7 +79,24 @@ The agent has four memory tools: `store_memory`, `recall_memories`, `forget_memo
 
 Each tool is a module with a clear interface. Tools are registered with the agent and can be enabled/disabled via config flags in `~/.minion/.env`.
 
-#### Search (`tools/search.py`)
+#### Filesystem (`tools/filesystem.py`)
+
+- **`read_file`** — reads up to 32 KB, returns truncation notice if larger
+- **`write_file`** — dry-run by default (`confirm=False`), only writes when `confirm=True`; creates parent directories
+- **`list_dir`** — sorted listing with file sizes, capped at 200 entries
+
+All paths are resolved via `Path.expanduser().resolve()` before access.
+
+#### Shell (`tools/shell.py`)
+
+Disabled by default (`MINION_ENABLE_SHELL=false`). When enabled:
+
+- A blocklist of dangerous patterns (e.g. `rm -rf /`, `mkfs`, `dd if=`, fork bomb) is checked before execution
+- Commands time out after 30 seconds (configurable)
+- Output is capped at 16 KB
+- The agent tool wrapper adds a `confirm` flag — destructive commands show a dry-run preview first; the agent only executes with `confirm=True` after the user approves in chat
+
+This is a safety net, not a sandbox. It prevents accidents, not determined misuse.
 
 Three-layer design:
 - **`SearchResult`** — Pydantic model: `title`, `url`, `snippet`
@@ -92,8 +109,8 @@ The agent's `web_search` tool is only registered when `config.enable_web_search`
 |---|---|---|
 | `store_memory`, `recall_memories`, `forget_memory`, `update_memory` | `memory/` | done |
 | `web_search` | `tools/search.py` | done |
-| `file_read`, `file_write`, `list_dir` | `tools/filesystem.py` | Milestone 4 |
-| `shell_exec` | `tools/shell.py` | Milestone 4 |
+| `read_file`, `write_file`, `list_directory` | `tools/filesystem.py` | done |
+| `run_shell` | `tools/shell.py` | done |
 | `git_status`, `git_log`, `git_diff` | `tools/git.py` | Milestone 5 |
 
 ### Config (`minion/config.py`)

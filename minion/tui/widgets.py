@@ -45,7 +45,13 @@ class UserMessage(Widget):
 class AssistantMessage(Widget):
     """
     A message bubble for assistant responses.
-    Uses Markdown so code blocks, bold, etc. render correctly.
+
+    Renders two sections stacked vertically inside a body container:
+    - Thinking block (dimmed, italic) — Qwen3's <think> reasoning
+    - Response text (markdown-rendered) — the actual answer
+
+    Thinking appears immediately as tokens arrive, so the user sees activity
+    instead of a blank screen during the reasoning phase.
     """
 
     DEFAULT_CSS = """
@@ -61,23 +67,62 @@ class AssistantMessage(Widget):
         width: auto;
         margin-right: 1;
     }
-    AssistantMessage .content {
+    AssistantMessage .body {
+        width: 1fr;
+        height: auto;
+        layout: vertical;
+    }
+    AssistantMessage .thinking {
+        color: $text-muted;
+        text-style: italic;
+        height: auto;
+        margin-bottom: 1;
+        padding-left: 1;
+        border-left: solid $panel;
+    }
+    AssistantMessage .thinking.hidden {
+        display: none;
+    }
+    AssistantMessage .response {
+        height: auto;
         width: 1fr;
     }
     """
 
     def __init__(self, text: str = "") -> None:
         super().__init__()
+        self._thinking = ""
         self._text = text
+        self._thinking_id = f"thinking-{id(self)}"
+        self._response_id = f"response-{id(self)}"
 
     def compose(self) -> ComposeResult:
         yield Static("M", classes="label")
-        yield Markdown(self._text, classes="content")
+        with Widget(classes="body"):
+            # thinking starts hidden; shown as soon as first chunk arrives
+            yield Static(
+                "",
+                classes="thinking hidden",
+                id=self._thinking_id,
+            )
+            yield Markdown(self._text, classes="response", id=self._response_id)
 
-    def append(self, chunk: str) -> None:
-        """Stream in a new chunk by updating the Markdown widget."""
+    def append_thinking(self, chunk: str) -> None:
+        """Stream in a thinking chunk — shown dimmed above the response."""
+        self._thinking += chunk
+        widget = self.query_one(f"#{self._thinking_id}", Static)
+        # Remove hidden class on first chunk so it becomes visible
+        widget.remove_class("hidden")
+        widget.update(f"Thinking…\n{self._thinking}")
+
+    def append_text(self, chunk: str) -> None:
+        """Stream in a response chunk — shown as markdown."""
         self._text += chunk
-        self.query_one(Markdown).update(self._text)
+        self.query_one(f"#{self._response_id}", Markdown).update(self._text)
+
+    # Keep backward compat for any callers using the old API
+    def append(self, chunk: str) -> None:
+        self.append_text(chunk)
 
 
 class StatusBar(Widget):

@@ -22,7 +22,7 @@ from textual.widget import Widget
 from textual.widgets import Static, TextArea
 
 from minion.agent.agent import create_agent
-from minion.agent.session import Session
+from minion.agent.session import Session, StreamEvent
 from minion.config import Config
 from minion.memory.manager import MemoryManager
 from minion.tools.search import SearchProvider
@@ -137,11 +137,20 @@ class MinionApp(App[None]):
     @work(exclusive=True)
     async def _stream_response(self, text: str, widget: AssistantMessage) -> None:
         try:
-            async for chunk in self._session.stream(text):
-                widget.append(chunk)
+            async for event in self._session.stream(text):
+                if event.kind == "thinking":
+                    # Thinking block arrives complete in one chunk (PydanticAI
+                    # accumulates all thinking tokens before surfacing them).
+                    # Reveal it all at once — the status bar already showed
+                    # "thinking..." so the user knew something was happening.
+                    widget.append_thinking(event.content)
+                    self.query_one(StatusBar).set_status("responding...")
+                else:
+                    self.query_one(StatusBar).set_status("responding...")
+                    widget.append_text(event.content)
                 self.query_one("#chat-history").scroll_end(animate=False)
         except Exception as exc:
-            widget.append(f"\n\n**Error:** {exc}")
+            widget.append_text(f"\n\n**Error:** {exc}")
         finally:
             self._busy = False
             self.query_one(StatusBar).set_status("ready")

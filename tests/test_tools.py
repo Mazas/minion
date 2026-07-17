@@ -7,10 +7,14 @@ network calls are made — fast, deterministic, offline-safe.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+import asyncio
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from minion.tools.filesystem import file_read, file_write, list_dir
+from minion.tools.shell import BlockedCommandError, shell_exec, _check_blocklist
 from minion.tools.search import (
     DuckDuckGoProvider,
     SearchResult,
@@ -163,3 +167,138 @@ def test_get_search_provider_unknown_raises() -> None:
     cfg = Config(search_provider="unknown_engine")
     with pytest.raises(ValueError, match="Unknown search provider"):
         get_search_provider(cfg)
+
+
+# ── Filesystem tools ──────────────────────────────────────────────────────────
+
+
+def test_file_read_existing(tmp_path: Path) -> None:
+    f = tmp_path / "hello.txt"
+    f.write_text("Hello, world!")
+    result = file_read(str(f))
+    assert result == "Hello, world!"
+
+
+def test_file_read_not_found(tmp_path: Path) -> None:
+    result = file_read(str(tmp_path / "missing.txt"))
+    assert "not found" in result
+
+
+def test_file_read_not_a_file(tmp_path: Path) -> None:
+    result = file_read(str(tmp_path))
+    assert "not a file" in result
+
+
+def test_file_read_truncates_large_file(tmp_path: Path) -> None:
+    f = tmp_path / "big.txt"
+    f.write_bytes(b"x" * 40_000)
+    result = file_read(str(f))
+    assert "truncated" in result
+    assert len(result) < 40_000
+
+
+def test_file_write_dry_run(tmp_path: Path) -> None:
+    f = tmp_path / "out.txt"
+    result = file_write(str(f), "some content", confirm=False)
+    assert "Dry run" in result
+    assert not f.exists()
+
+
+def test_file_write_confirmed(tmp_path: Path) -> None:
+    f = tmp_path / "out.txt"
+    result = file_write(str(f), "hello file", confirm=True)
+    assert "Written" in result
+    assert f.read_text() == "hello file"
+
+
+def test_file_write_creates_parents(tmp_path: Path) -> None:
+    f = tmp_path / "a" / "b" / "c.txt"
+    file_write(str(f), "nested", confirm=True)
+    assert f.read_text() == "nested"
+
+
+def test_list_dir_basic(tmp_path: Path) -> None:
+    (tmp_path / "file.txt").write_text("hi")
+    (tmp_path / "subdir").mkdir()
+    result = list_dir(str(tmp_path))
+    assert "file.txt" in result
+    assert "subdir/" in result
+
+
+def test_list_dir_not_found(tmp_path: Path) -> None:
+    result = list_dir(str(tmp_path / "nope"))
+    assert "not found" in result
+
+
+def test_list_dir_not_a_directory(tmp_path: Path) -> None:
+    f = tmp_path / "file.txt"
+    f.write_text("x")
+    result = list_dir(str(f))
+    assert "not a directory" in result
+
+
+def test_list_dir_shows_sizes(tmp_path: Path) -> None:
+    (tmp_path / "data.bin").write_bytes(b"x" * 2048)
+    result = list_dir(str(tmp_path))
+    assert "data.bin" in result
+    assert "KB" in result or "B" in result
+
+
+# ── Shell tool ────────────────────────────────────────────────────────────────
+
+
+def test_check_blocklist_safe_command() -> None:
+    # Should not raise
+    _check_blocklist("ls -la", [])
+
+
+def test_check_blocklist_blocked_pattern() -> None:
+    with pytest.raises(BlockedCommandError, match="blocked"):
+        _check_blocklist("rm -rf /", [])
+
+
+def test_check_blocklist_custom_pattern() -> None:
+    with pytest.raises(BlockedCommandError):
+        _check_blocklist("drop table users", ["drop table"])
+
+
+def test_check_blocklist_case_insensitive() -> None:
+    with pytest.raises(BlockedCommandError):
+        _check_blocklist("RM -RF /", [])
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_simple_command() -> None:
+    result = await shell_exec("echo hello")
+    assert "hello" in result
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_nonzero_exit() -> None:
+    result = await shell_exec("bash -c 'exit 1'")
+    assert "exit code 1" in result
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_blocked_command() -> None:
+    with pytest.raises(BlockedCommandError):
+        await shell_exec("rm -rf /")
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_timeout() -> None:
+    result = await shell_exec("sleep 10", timeout=1)
+    assert "timed out" in result
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_workdir(tmp_path: Path) -> None:
+    (tmp_path / "marker.txt").write_text("found")
+    result = await shell_exec("ls", workdir=str(tmp_path))
+    assert "marker.txt" in result
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_stderr_captured() -> None:
+    result = await shell_exec("echo error >&2")
+    assert "error" in result
