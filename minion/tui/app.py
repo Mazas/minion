@@ -13,6 +13,7 @@ Key design choices:
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from textual import on, work
@@ -96,7 +97,7 @@ class MinionApp(App[None]):
     def compose(self) -> ComposeResult:
         yield ScrollableContainer(id="chat-history")
         yield InputArea(id="input-area")
-        yield StatusBar(self._config.model)
+        yield StatusBar(self._config.orchestrator_model)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -108,6 +109,9 @@ class MinionApp(App[None]):
         self._restore_or_welcome()
         self.query_one("#user-input", TextArea).focus()
         await self._refresh_status()
+        # Silent startup tasks — run in background, don't block UI
+        asyncio.create_task(self._memory.decay_stale())
+        asyncio.create_task(self._memory.backfill_embeddings())
 
     def _restore_or_welcome(self) -> None:
         """Show previous messages if resuming, otherwise show welcome."""
@@ -189,6 +193,8 @@ class MinionApp(App[None]):
                 if event.kind == "thinking":
                     widget.append_thinking(event.content)
                     self.query_one(StatusBar).set_status("responding...")
+                elif event.kind == "tool":
+                    self.query_one(StatusBar).set_status(event.content)
                 else:
                     self.query_one(StatusBar).set_status("responding...")
                     widget.append_text(event.content)

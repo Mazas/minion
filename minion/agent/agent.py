@@ -18,6 +18,7 @@ from pydantic_ai import Agent, RunContext
 from minion.config import Config
 from minion.llm.providers import get_provider
 from minion.memory.manager import MemoryManager
+from minion.tools.delegate import run_delegate
 from minion.tools.filesystem import file_read, file_write, list_dir
 from minion.tools.git import git_branches, git_commit, git_diff, git_log, git_status
 from minion.tools.search import SearchProvider, format_results, get_search_provider
@@ -90,6 +91,24 @@ When working with git repositories:
 - Never stage files or modify git config — only read state and commit what is
   already staged.
 
+## Delegation
+You are a fast coordinator. Handle simple tasks directly. Delegate to specialists
+when a task genuinely warrants deeper capability:
+
+- role="reasoning": complex multi-step analysis, comparing tradeoffs, deep
+  explanations, tasks requiring careful step-by-step thinking
+- role="code": writing, reviewing, or debugging code
+
+Rules:
+- Only delegate if you are confident the task requires specialist capability.
+  Do NOT delegate simple questions, memory operations, or web searches.
+- Include ALL relevant context in the task description — the specialist has
+  no conversation history and no tools.
+- After the specialist responds, present the result directly to the user.
+  Do not summarise or restate unless the user asks for it.
+- Inform the user you're getting a specialist to handle it (e.g. "Let me
+  get our reasoning specialist on this...") before delegating.
+
 ## Tools
 Use tools when they genuinely help. Don't mention a tool by name to the user.
 """
@@ -105,6 +124,7 @@ class AgentDeps:
 def create_agent(config: Config, memory: MemoryManager) -> Agent[AgentDeps, str]:
     """
     Build and return the configured PydanticAI agent with all tools.
+    Uses config.orchestrator_model as the main model.
     """
     provider = get_provider(config)
     model = provider.get_model()
@@ -124,6 +144,7 @@ def create_agent(config: Config, memory: MemoryManager) -> Agent[AgentDeps, str]
         content: str,
         type: str = "fact",
         tags: list[str] | None = None,
+        importance: int = 3,
     ) -> str:
         """
         Store a piece of information about the user for future reference.
@@ -133,8 +154,10 @@ def create_agent(config: Config, memory: MemoryManager) -> Agent[AgentDeps, str]
                      (should make sense when read back without conversation context).
             type: Category — one of: fact, preference, project, context.
             tags: Keywords that help retrieve this memory later (e.g. ["python", "tools"]).
+            importance: How important is this memory? 1=low, 3=normal, 5=critical.
+                        High importance (>=4) memories are never auto-decayed.
         """
-        memory = await ctx.deps.memory.remember(content, type=type, tags=tags)
+        memory = await ctx.deps.memory.remember(content, type=type, tags=tags, importance=importance)
         return f"Stored memory #{memory.id}: {memory.content}"
 
     @agent.tool
@@ -371,5 +394,33 @@ def create_agent(config: Config, memory: MemoryManager) -> Agent[AgentDeps, str]
                 confirm: Must be True to actually commit.
             """
             return await git_commit(message=message, cwd=cwd, confirm=confirm)
+
+    # ── Delegation tool ───────────────────────────────────────────────────
+
+    if config.delegate_models:
+
+        @agent.tool
+        async def delegate_to_specialist(
+            ctx: RunContext[AgentDeps],
+            role: str,
+            task: str,
+            context: str = "",
+        ) -> str:
+            """
+            Delegate a task to a specialist model with deeper capability.
+
+            Use for tasks that genuinely require specialist expertise:
+            - role="reasoning": complex analysis, multi-step reasoning, tradeoffs
+            - role="code": writing, reviewing, or debugging code
+
+            The specialist has NO conversation history and NO tools. Include all
+            relevant context in the task description.
+
+            Args:
+                role: Specialist role — one of the configured delegate roles.
+                task: Complete self-contained task description.
+                context: Any additional context that helps the specialist.
+            """
+            return await run_delegate(role=role, task=task, context=context, config=config)
 
     return agent

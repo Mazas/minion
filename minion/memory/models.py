@@ -28,29 +28,30 @@ class MemoryType(StrEnum):
 
 
 class Memory(BaseModel):
-    id: int | None = None  # None until persisted
+    id: int | None = None
     type: MemoryType
     content: str
     tags: list[str] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    importance: int = Field(default=3, ge=1, le=5)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     recalled_count: int = 0
 
     @classmethod
-    def fact(cls, content: str, tags: list[str] | None = None) -> Self:
-        return cls(type=MemoryType.FACT, content=content, tags=tags or [])
+    def fact(cls, content: str, tags: list[str] | None = None, importance: int = 3) -> Self:
+        return cls(type=MemoryType.FACT, content=content, tags=tags or [], importance=importance)
 
     @classmethod
-    def preference(cls, content: str, tags: list[str] | None = None) -> Self:
-        return cls(type=MemoryType.PREFERENCE, content=content, tags=tags or [])
+    def preference(cls, content: str, tags: list[str] | None = None, importance: int = 3) -> Self:
+        return cls(type=MemoryType.PREFERENCE, content=content, tags=tags or [], importance=importance)
 
     @classmethod
-    def project(cls, content: str, tags: list[str] | None = None) -> Self:
-        return cls(type=MemoryType.PROJECT, content=content, tags=tags or [])
+    def project(cls, content: str, tags: list[str] | None = None, importance: int = 3) -> Self:
+        return cls(type=MemoryType.PROJECT, content=content, tags=tags or [], importance=importance)
 
     @classmethod
-    def context(cls, content: str, tags: list[str] | None = None) -> Self:
-        return cls(type=MemoryType.CONTEXT, content=content, tags=tags or [])
+    def context(cls, content: str, tags: list[str] | None = None, importance: int = 3) -> Self:
+        return cls(type=MemoryType.CONTEXT, content=content, tags=tags or [], importance=importance)
 
     def tag_string(self) -> str:
         """Space-separated tags for FTS indexing."""

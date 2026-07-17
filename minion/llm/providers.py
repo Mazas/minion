@@ -21,29 +21,30 @@ from minion.config import Config
 class LLMProvider(Protocol):
     """Anything that can hand back a PydanticAI Model is a valid provider."""
 
-    def get_model(self) -> Model: ...
+    def get_model(self, model_override: str | None = None) -> Model: ...
 
 
 class OllamaProvider:
     """
     Connects to a local Ollama instance using its OpenAI-compatible REST API.
 
-    Ollama serves at http://localhost:11434/v1 by default. The OpenAI client
-    requires an API key field even for local models, so we pass a dummy value.
+    model_override lets callers (e.g. the delegation tool) request a specific
+    model without creating a new provider instance.
     """
 
     def __init__(self, config: Config) -> None:
         self._config = config
 
-    def get_model(self) -> Model:
+    def get_model(self, model_override: str | None = None) -> Model:
+        model_name = model_override or self._config.orchestrator_model
         provider = OpenAIProvider(
             base_url=self._config.ollama_base_url,
             api_key=self._config.ollama_api_key,
         )
-        return OpenAIChatModel(self._config.model, provider=provider)
+        return OpenAIChatModel(model_name, provider=provider)
 
 
-def get_provider(config: Config) -> LLMProvider:
+def get_provider(config: Config) -> OllamaProvider:
     """
     Factory — returns the configured provider.
     Extend this with an if/elif chain as cloud providers are added.

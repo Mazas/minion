@@ -443,3 +443,151 @@ async def test_history_empty_session(tmp_path: Path) -> None:
     msgs = await manager.load_messages(sid)
     assert msgs == []
     manager.close()
+
+
+# ── Delegation tool ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_delegate_known_role(tmp_path: Path) -> None:
+    from unittest.mock import AsyncMock, patch
+    from minion.tools.delegate import run_delegate
+    from minion.config import Config
+
+    cfg = Config(
+        orchestrator_model="qwen3:4b",
+        delegate_models={"reasoning": "qwen3:8b", "code": "qwen2.5-coder:7b"},
+    )
+
+    mock_result = AsyncMock()
+    mock_result.output = "The answer is 42."
+
+    with patch("minion.tools.delegate.Agent") as MockAgent:
+        mock_agent_instance = AsyncMock()
+        mock_agent_instance.run = AsyncMock(return_value=mock_result)
+        MockAgent.return_value = mock_agent_instance
+
+        result = await run_delegate(
+            role="reasoning",
+            task="What is the meaning of life?",
+            context="",
+            config=cfg,
+        )
+
+    assert result == "The answer is 42."
+
+
+@pytest.mark.asyncio
+async def test_delegate_unknown_role() -> None:
+    from minion.tools.delegate import run_delegate
+    from minion.config import Config
+
+    cfg = Config(
+        orchestrator_model="qwen3:4b",
+        delegate_models={"reasoning": "qwen3:8b"},
+    )
+    result = await run_delegate(
+        role="nonexistent",
+        task="Do something",
+        context="",
+        config=cfg,
+    )
+    assert "No specialist model configured" in result
+    assert "nonexistent" in result
+
+
+@pytest.mark.asyncio
+async def test_delegate_uses_correct_model() -> None:
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from minion.tools.delegate import run_delegate
+    from minion.config import Config
+
+    cfg = Config(
+        orchestrator_model="qwen3:4b",
+        delegate_models={"code": "qwen2.5-coder:7b"},
+    )
+
+    captured_model_name: list[str] = []
+
+    mock_result = AsyncMock()
+    mock_result.output = "def hello(): pass"
+
+    def fake_get_model(model_override=None):
+        captured_model_name.append(model_override or "default")
+        return MagicMock()
+
+    with patch("minion.tools.delegate.get_provider") as mock_provider_fn:
+        mock_provider = MagicMock()
+        mock_provider.get_model = fake_get_model
+        mock_provider_fn.return_value = mock_provider
+
+        with patch("minion.tools.delegate.Agent") as MockAgent:
+            mock_agent_instance = AsyncMock()
+            mock_agent_instance.run = AsyncMock(return_value=mock_result)
+            MockAgent.return_value = mock_agent_instance
+
+            await run_delegate(
+                role="code",
+                task="Write a hello function",
+                context="",
+                config=cfg,
+            )
+
+    assert "qwen2.5-coder:7b" in captured_model_name
+
+
+@pytest.mark.asyncio
+async def test_delegate_includes_context_in_task() -> None:
+    from unittest.mock import AsyncMock, patch
+    from minion.tools.delegate import run_delegate
+    from minion.config import Config
+
+    cfg = Config(
+        orchestrator_model="qwen3:4b",
+        delegate_models={"code": "qwen2.5-coder:7b"},
+    )
+
+    received_task: list[str] = []
+
+    mock_result = AsyncMock()
+    mock_result.output = "done"
+
+    with patch("minion.tools.delegate.Agent") as MockAgent:
+        mock_agent_instance = AsyncMock()
+
+        async def capture_run(task):
+            received_task.append(task)
+            return mock_result
+
+        mock_agent_instance.run = capture_run
+        MockAgent.return_value = mock_agent_instance
+
+        await run_delegate(
+            role="code",
+            task="Write a function",
+            context="Use Python 3.11+",
+            config=cfg,
+        )
+
+    assert len(received_task) == 1
+    assert "Write a function" in received_task[0]
+    assert "Use Python 3.11+" in received_task[0]
+
+
+# ── Cosine similarity ─────────────────────────────────────────────────────────
+
+
+def test_cosine_similarity_identical() -> None:
+    from minion.llm.embeddings import cosine_similarity
+    v = [1.0, 0.5, 0.3]
+    assert abs(cosine_similarity(v, v) - 1.0) < 1e-6
+
+
+def test_cosine_similarity_orthogonal() -> None:
+    from minion.llm.embeddings import cosine_similarity
+    assert abs(cosine_similarity([1.0, 0.0], [0.0, 1.0])) < 1e-6
+
+
+def test_cosine_similarity_zero_vector() -> None:
+    from minion.llm.embeddings import cosine_similarity
+    assert cosine_similarity([0.0, 0.0], [1.0, 0.0]) == 0.0

@@ -168,3 +168,139 @@ async def test_manager_format_empty(manager: MemoryManager) -> None:
     memories = await manager.recall("nothing here")
     formatted = MemoryManager.format_for_context(memories)
     assert "no relevant memories" in formatted
+
+
+# ── Importance field ──────────────────────────────────────────────────────────
+
+
+def test_store_insert_with_importance(store: MemoryStore) -> None:
+    mem = Memory.fact("User is a senior engineer", importance=5)
+    saved = store.insert(mem)
+    fetched = store.get_by_id(saved.id)
+    assert fetched.importance == 5
+
+
+def test_store_importance_default(store: MemoryStore) -> None:
+    mem = Memory.preference("Prefers vim")
+    saved = store.insert(mem)
+    fetched = store.get_by_id(saved.id)
+    assert fetched.importance == 3
+
+
+def test_store_update_importance(store: MemoryStore) -> None:
+    mem = store.insert(Memory.context("Currently in a meeting"))
+    store.update_importance(mem.id, 5)
+    fetched = store.get_by_id(mem.id)
+    assert fetched.importance == 5
+
+
+# ── Embeddings ────────────────────────────────────────────────────────────────
+
+
+def test_store_save_and_semantic_search(store: MemoryStore) -> None:
+    from minion.llm.embeddings import cosine_similarity
+
+    mem1 = store.insert(Memory.preference("Prefers dark themes"))
+    mem2 = store.insert(Memory.fact("User lives in Berlin"))
+
+    # Simulate embedding with synthetic vectors
+    vec_dark = [1.0, 0.0, 0.0]
+    vec_berlin = [0.0, 1.0, 0.0]
+    store.save_embedding(mem1.id, vec_dark)
+    store.save_embedding(mem2.id, vec_berlin)
+
+    # Search with vector close to "dark themes"
+    results = store.search_semantic([0.9, 0.1, 0.0], limit=2)
+    assert len(results) >= 1
+    assert results[0].id == mem1.id  # dark themes should rank first
+
+
+def test_store_get_without_embeddings(store: MemoryStore) -> None:
+    mem1 = store.insert(Memory.fact("Has embedding"))
+    mem2 = store.insert(Memory.fact("No embedding"))
+    store.save_embedding(mem1.id, [1.0, 0.0])
+
+    missing = store.get_without_embeddings()
+    ids = [m.id for m in missing]
+    assert mem2.id in ids
+    assert mem1.id not in ids
+
+
+# ── Decay ─────────────────────────────────────────────────────────────────────
+
+
+def test_decay_context_memory(store: MemoryStore) -> None:
+    from datetime import datetime, timezone, timedelta
+
+    # Insert a context memory that looks 60 days old
+    old_date = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+    store._conn.execute(
+        "INSERT INTO memories (type, content, tags, created_at, updated_at, "
+        "recalled_count, importance, last_recalled_at, embedding) "
+        "VALUES ('context', 'Old context', '[]', ?, ?, 0, 3, NULL, NULL)",
+        (old_date, old_date),
+    )
+    store._conn.commit()
+
+    assert store.count() == 1
+    deleted = store.decay_stale(context_days=30, project_days=90)
+    assert deleted == 1
+    assert store.count() == 0
+
+
+def test_decay_spares_high_importance(store: MemoryStore) -> None:
+    from datetime import datetime, timezone, timedelta
+
+    old_date = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+    store._conn.execute(
+        "INSERT INTO memories (type, content, tags, created_at, updated_at, "
+        "recalled_count, importance, last_recalled_at, embedding) "
+        "VALUES ('context', 'Important context', '[]', ?, ?, 0, 4, NULL, NULL)",
+        (old_date, old_date),
+    )
+    store._conn.commit()
+
+    deleted = store.decay_stale(context_days=30, project_days=90)
+    assert deleted == 0
+    assert store.count() == 1
+
+
+def test_decay_spares_fact_and_preference(store: MemoryStore) -> None:
+    from datetime import datetime, timezone, timedelta
+
+    old_date = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()
+    for mtype in ("fact", "preference"):
+        store._conn.execute(
+            "INSERT INTO memories (type, content, tags, created_at, updated_at, "
+            "recalled_count, importance, last_recalled_at, embedding) "
+            f"VALUES ('{mtype}', 'Old {mtype}', '[]', ?, ?, 0, 3, NULL, NULL)",
+            (old_date, old_date),
+        )
+    store._conn.commit()
+
+    deleted = store.decay_stale(context_days=30, project_days=90)
+    assert deleted == 0
+    assert store.count() == 2
+
+
+def test_decay_project_memory(store: MemoryStore) -> None:
+    from datetime import datetime, timezone, timedelta
+
+    old_date = (datetime.now(timezone.utc) - timedelta(days=100)).isoformat()
+    store._conn.execute(
+        "INSERT INTO memories (type, content, tags, created_at, updated_at, "
+        "recalled_count, importance, last_recalled_at, embedding) "
+        "VALUES ('project', 'Old project', '[]', ?, ?, 0, 3, NULL, NULL)",
+        (old_date, old_date),
+    )
+    store._conn.commit()
+
+    deleted = store.decay_stale(context_days=30, project_days=90)
+    assert deleted == 1
+
+
+def test_decay_recent_memory_not_deleted(store: MemoryStore) -> None:
+    mem = store.insert(Memory.context("Current context"))
+    deleted = store.decay_stale(context_days=30, project_days=90)
+    assert deleted == 0
+    assert store.get_by_id(mem.id) is not None

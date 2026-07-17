@@ -2,20 +2,25 @@
 
 A local-first personal AI assistant that lives in your terminal.
 
-Minion runs a local LLM via Ollama, remembers things about you across sessions, and can use tools like web search, file access, and shell commands. It grows with you over time.
+Minion runs local LLMs via Ollama, remembers things about you across sessions, searches the web, reads files, runs git commands, and delegates complex tasks to specialist models.
 
 ```
 ┌─────────────────────────────────────────────┐
-│  minion                          qwen3:8b   │
+│  minion                          qwen3:4b   │
 ├─────────────────────────────────────────────┤
 │                                             │
-│  You: I prefer terminal apps over web UIs   │
+│  You: Can you write a binary search in Rust │
+│       and explain the tradeoffs vs linear?  │
 │                                             │
-│  Minion: Got it — I'll keep that in mind.   │
+│  M: Let me get our specialists on this...   │
+│  [delegating to code...]                    │
+│  [delegating to reasoning...]               │
+│                                             │
+│  Here's the implementation: ...             │
 │                                             │
 ├─────────────────────────────────────────────┤
 │ > ________________________________________  │
-│  qwen3:8b                 3 memories  ready │
+│  qwen3:4b          5 memories · session 3   │
 └─────────────────────────────────────────────┘
 ```
 
@@ -23,28 +28,21 @@ Minion runs a local LLM via Ollama, remembers things about you across sessions, 
 
 - **Local-first** — your data stays on your machine
 - **Persistent memory** — remembers facts, preferences, and context across sessions
+- **Hybrid recall** — keyword (FTS5) + semantic (vector embeddings) search
 - **Tool-capable** — web search, filesystem, shell, git
+- **Delegating** — fast orchestrator routes complex tasks to specialist models
 - **Hackable** — small files, clear boundaries, replaceable components
-- **Terminal-native** — proper TUI, not a web app
 
 ## Architecture
 
 ```
 minion/
-├── agent/      # PydanticAI agent + session management
-├── llm/        # Ollama provider (cloud providers optional later)
-├── memory/     # SQLite-backed memory store with FTS5 search
-├── tools/      # web search, filesystem, shell, git
+├── agent/      # PydanticAI agent, session management, streaming
+├── llm/        # Ollama provider, embedding client
+├── memory/     # SQLite + FTS5 + vector search, session history, decay
+├── tools/      # web search, filesystem, shell, git, delegation
 └── tui/        # Textual TUI (chat pane + input + status bar)
 ```
-
-### Key decisions
-
-- **[PydanticAI](https://ai.pydantic.dev/)** for the agent — type-safe, minimal, tools are plain Python functions
-- **Ollama** via its OpenAI-compatible endpoint — easy model swaps, works offline
-- **Textual** for the TUI — proper split-pane layout, markdown rendering, keyboard-driven
-- **SQLite + FTS5** for memory — zero dependencies, single inspectable file, good enough recall for personal use
-- **DuckDuckGo** for web search — no API key required, privacy-respecting
 
 ## Requirements
 
@@ -55,8 +53,11 @@ minion/
 ## Quick Start
 
 ```bash
-# Pull a model
-ollama pull qwen3:8b
+# Pull required models
+ollama pull qwen3:4b          # orchestrator (fast coordinator)
+ollama pull qwen3:8b          # reasoning specialist
+ollama pull qwen2.5-coder:7b  # code specialist
+ollama pull nomic-embed-text  # embeddings for semantic memory search
 
 # Install and run
 uv sync
@@ -68,9 +69,9 @@ uv run minion
 Copy `.env.example` to `~/.minion/.env` and adjust as needed.
 
 ```env
-MINION_MODEL=qwen3:8b
-MINION_OLLAMA_BASE_URL=http://localhost:11434/v1
-MINION_DATA_DIR=~/.minion
+MINION_ORCHESTRATOR_MODEL=qwen3:4b
+MINION_DELEGATE_MODELS='{"reasoning":"qwen3:8b","code":"qwen2.5-coder:7b"}'
+MINION_EMBED_MODEL=nomic-embed-text
 ```
 
 ## Key bindings
@@ -81,41 +82,52 @@ MINION_DATA_DIR=~/.minion
 | `Ctrl+N` | Start a new session |
 | `Ctrl+Q` | Quit |
 
+## Memory
+
+Minion stores four types of memories, all in `~/.minion/minion.db`:
+
+| Type | Example | Decays? |
+|---|---|---|
+| `fact` | "User's name is Alex" | Never |
+| `preference` | "Prefers terminal apps over web UIs" | Never |
+| `project` | "Working on a Rust CLI called fenix" | After 90 days inactive |
+| `context` | "Currently learning Neovim" | After 30 days inactive |
+
+Recall uses hybrid search: FTS5 keyword matching + cosine vector similarity via `nomic-embed-text`. High-importance memories (importance ≥ 4) never decay. Backfill and decay run silently on startup.
+
 ## Session history
 
-Minion automatically saves and restores conversation history. When you restart, your last session resumes where you left off. Start a fresh conversation with `Ctrl+N`.
+Minion automatically saves and restores conversation history. When you restart, your last session resumes. Start fresh with `Ctrl+N`.
 
-Minion remembers things about you across sessions. It stores four types of memories:
+## Model delegation
 
-| Type | Example |
-|---|---|
-| `fact` | "User's name is Alex" |
-| `preference` | "Prefers terminal apps over web UIs" |
-| `project` | "Working on a Rust CLI called fenix" |
-| `context` | "Currently learning Neovim" |
+The orchestrator (`qwen3:4b`) coordinates and handles simple tasks. For complex work it delegates to specialists:
 
-Memories are stored in `~/.minion/minion.db` — a plain SQLite file you can inspect, export, or delete. The status bar shows your current memory count. The agent recalls relevant memories automatically before each response.
+- `reasoning` → `qwen3:8b` — deep analysis, multi-step thinking, tradeoffs
+- `code` → `qwen2.5-coder:7b` — writing, reviewing, debugging code
 
-## Roadmap
-
-- [x] Repository setup
-- [x] **Milestone 1** — Project scaffold + Textual TUI + basic Ollama chat
-- [x] **Milestone 2** — Persistent memory (SQLite + FTS5)
-- [x] **Milestone 3** — Web search tool (DuckDuckGo)
-- [x] **Milestone 4** — Filesystem + shell tools
-- [x] **Milestone 5** — Git tools + session history + TUI polish
+Add roles in `~/.minion/.env`:
+```env
+MINION_DELEGATE_MODELS='{"reasoning":"qwen3:8b","code":"qwen2.5-coder:7b","custom":"llama3.2:3b"}'
+```
 
 ## Data
-
-All app data is stored in `~/.minion/`:
 
 ```
 ~/.minion/
 ├── .env          # local config overrides
-└── minion.db     # SQLite database (memories + session history)
+└── minion.db     # SQLite: memories, embeddings, session history
 ```
 
-Nothing is sent to the cloud unless you explicitly configure a cloud model provider.
+Nothing is sent to the cloud unless you configure a cloud model provider.
+
+## Backlog
+
+- Live streaming from delegate to TUI (currently synchronous)
+- `sqlite-vec` for O(1) vector search at scale (currently pure Python cosine)
+- Obsidian integration
+- `/commands` slash commands in TUI
+- Cloud model provider support (OpenAI, Anthropic)
 
 ## License
 

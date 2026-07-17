@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from pydantic_ai import Agent
-from pydantic_ai.messages import ModelMessage, ThinkingPart, TextPart
+from pydantic_ai.messages import ModelMessage, ThinkingPart, TextPart, ToolCallPart
 
 from minion.agent.agent import AgentDeps
 from minion.memory.manager import MemoryManager
@@ -25,7 +25,7 @@ from minion.tools.search import SearchProvider
 @dataclass
 class StreamEvent:
     """A single streamed chunk from the agent, tagged by type."""
-    kind: Literal["thinking", "text"]
+    kind: Literal["thinking", "text", "tool"]
     content: str
 
 
@@ -112,6 +112,17 @@ class Session:
                         if delta:
                             yield StreamEvent(kind="text", content=delta)
                         seen_text = current_len
+
+                    elif isinstance(part, ToolCallPart):
+                        # Surface delegation tool calls so TUI can update status bar
+                        if part.tool_name == "delegate_to_specialist":
+                            try:
+                                import json
+                                args = json.loads(part.args_as_json_str())
+                                role = args.get("role", "specialist")
+                                yield StreamEvent(kind="tool", content=f"delegating to {role}...")
+                            except Exception:
+                                yield StreamEvent(kind="tool", content="delegating...")
 
             self._history.extend(streamed.new_messages())
 
