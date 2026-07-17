@@ -3,8 +3,9 @@ minion/agent/agent.py
 
 The PydanticAI agent. Owns tool definitions and system prompt.
 
-Agent dependencies (AgentDeps) carry runtime objects (e.g. MemoryManager)
-that tools need. PydanticAI injects deps via RunContext on every tool call.
+Agent dependencies (AgentDeps) carry runtime objects (e.g. MemoryManager,
+SearchProvider) that tools need. PydanticAI injects deps via RunContext on
+every tool call.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from pydantic_ai import Agent, RunContext
 from minion.config import Config
 from minion.llm.providers import get_provider
 from minion.memory.manager import MemoryManager
+from minion.tools.search import SearchProvider, format_results, get_search_provider
 
 SYSTEM_PROMPT = """\
 You are Minion, a personal AI assistant running locally on the user's machine.
@@ -44,6 +46,16 @@ Memory types:
   project     — ongoing work or goals
   context     — situational/temporary context
 
+## Web Search
+You have access to a web search tool. Use it when:
+- The user asks about current events, news, or recent information.
+- The user asks a factual question you're uncertain about or that may have changed.
+- The user explicitly asks you to search or look something up.
+
+Do NOT search for things you know well (general programming concepts, history,
+stable facts). Do NOT mention the search tool by name. Just use it and cite the
+source URLs naturally in your response.
+
 ## Tools
 Use tools when they genuinely help. Don't mention a tool by name to the user.
 """
@@ -53,11 +65,12 @@ Use tools when they genuinely help. Don't mention a tool by name to the user.
 class AgentDeps:
     """Runtime dependencies injected into every tool call."""
     memory: MemoryManager
+    search: SearchProvider
 
 
 def create_agent(config: Config, memory: MemoryManager) -> Agent[AgentDeps, str]:
     """
-    Build and return the configured PydanticAI agent with memory tools.
+    Build and return the configured PydanticAI agent with all tools.
     """
     provider = get_provider(config)
     model = provider.get_model()
@@ -137,5 +150,26 @@ def create_agent(config: Config, memory: MemoryManager) -> Agent[AgentDeps, str]
         """
         updated = await ctx.deps.memory.update(memory_id, content)
         return f"Memory #{memory_id} updated." if updated else f"Memory #{memory_id} not found."
+
+    # ── Search tool ───────────────────────────────────────────────────────
+
+    if config.enable_web_search:
+
+        @agent.tool
+        async def web_search(
+            ctx: RunContext[AgentDeps],
+            query: str,
+            limit: int = 5,
+        ) -> str:
+            """
+            Search the web for current information. Use for recent events, news,
+            or facts you're uncertain about. Returns titles, URLs, and snippets.
+
+            Args:
+                query: The search query. Be specific for better results.
+                limit: Number of results to return (default 5, max 10).
+            """
+            results = await ctx.deps.search.search(query, limit=min(limit, 10))
+            return format_results(results)
 
     return agent

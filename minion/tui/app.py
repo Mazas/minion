@@ -25,6 +25,7 @@ from minion.agent.agent import create_agent
 from minion.agent.session import Session
 from minion.config import Config
 from minion.memory.manager import MemoryManager
+from minion.tools.search import SearchProvider
 from minion.tui.widgets import AssistantMessage, StatusBar, UserMessage
 
 CSS_PATH = Path(__file__).parent / "app.tcss"
@@ -80,12 +81,13 @@ class MinionApp(App[None]):
         ("ctrl+q", "quit", "Quit"),
     ]
 
-    def __init__(self, config: Config, memory: MemoryManager) -> None:
+    def __init__(self, config: Config, memory: MemoryManager, search: SearchProvider) -> None:
         super().__init__()
         self._config = config
         self._memory = memory
+        self._search = search
         self._agent = create_agent(config, memory)
-        self._session = Session(self._agent, memory)
+        self._session = Session(self._agent, memory, search)
         self._busy = False
 
     # ── Layout ────────────────────────────────────────────────────────────

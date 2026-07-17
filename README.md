@@ -91,7 +91,7 @@ Memories are stored in `~/.minion/minion.db` — a plain SQLite file you can ins
 - [x] Repository setup
 - [x] **Milestone 1** — Project scaffold + Textual TUI + basic Ollama chat
 - [x] **Milestone 2** — Persistent memory (SQLite + FTS5)
-- [ ] **Milestone 3** — Web search tool (DuckDuckGo)
+- [x] **Milestone 3** — Web search tool (DuckDuckGo)
 - [ ] **Milestone 4** — Filesystem + shell tools
 - [ ] **Milestone 5** — Git tool + session history + TUI polish
 

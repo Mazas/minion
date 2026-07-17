@@ -77,12 +77,21 @@ The agent has four memory tools: `store_memory`, `recall_memories`, `forget_memo
 
 ### Tools (`minion/tools/`)
 
-Each tool is a module with a clear interface. Tools are registered with the agent and can be enabled/disabled via config.
+Each tool is a module with a clear interface. Tools are registered with the agent and can be enabled/disabled via config flags in `~/.minion/.env`.
+
+#### Search (`tools/search.py`)
+
+Three-layer design:
+- **`SearchResult`** — Pydantic model: `title`, `url`, `snippet`
+- **`SearchProvider`** — Protocol (interface) any provider must satisfy: `search(query, limit) -> list[SearchResult]`
+- **`DuckDuckGoProvider`** — Default implementation using the `ddgs` package. No API key. Runs the sync client in `asyncio.to_thread()` to avoid blocking the event loop.
+
+The agent's `web_search` tool is only registered when `config.enable_web_search` is `True`. Swapping to a different provider (Brave Search, Tavily, etc.) means implementing the protocol and adding an elif in `get_search_provider()` — the agent tool code is untouched.
 
 | Tool | Module | Status |
 |---|---|---|
 | `store_memory`, `recall_memories`, `forget_memory`, `update_memory` | `memory/` | done |
-| `web_search` | `tools/search.py` | Milestone 3 |
+| `web_search` | `tools/search.py` | done |
 | `file_read`, `file_write`, `list_dir` | `tools/filesystem.py` | Milestone 4 |
 | `shell_exec` | `tools/shell.py` | Milestone 4 |
 | `git_status`, `git_log`, `git_diff` | `tools/git.py` | Milestone 5 |

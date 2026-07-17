@@ -42,6 +42,9 @@ class Config(BaseSettings):
     enable_filesystem: bool = True
     enable_git: bool = True
 
+    # Search
+    search_provider: str = Field(default="duckduckgo", description="Search provider to use")
+
     @field_validator("data_dir", mode="before")
     @classmethod
     def expand_path(cls, v: object) -> Path:

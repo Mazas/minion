@@ -14,6 +14,7 @@ from pydantic_ai.messages import ModelMessage
 
 from minion.agent.agent import AgentDeps
 from minion.memory.manager import MemoryManager
+from minion.tools.search import SearchProvider
 
 
 class Session:
@@ -24,9 +25,15 @@ class Session:
     each call. The Session owns that list so the TUI doesn't have to.
     """
 
-    def __init__(self, agent: Agent[AgentDeps, str], memory: MemoryManager) -> None:
+    def __init__(
+        self,
+        agent: Agent[AgentDeps, str],
+        memory: MemoryManager,
+        search: SearchProvider,
+    ) -> None:
         self._agent = agent
         self._memory = memory
+        self._search = search
         self._history: list[ModelMessage] = []
 
     async def stream(self, user_message: str) -> AsyncIterator[str]:
@@ -34,7 +41,7 @@ class Session:
         Send a user message and yield streamed text chunks.
         Updates internal history after the response completes.
         """
-        deps = AgentDeps(memory=self._memory)
+        deps = AgentDeps(memory=self._memory, search=self._search)
         async with self._agent.run_stream(
             user_message,
             deps=deps,
