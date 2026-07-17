@@ -5,10 +5,10 @@ The main Textual application. Owns the layout (chat history + input area +
 status bar), handles user input, and drives the agent session.
 
 Key design choices:
-- The app creates the Session once and reuses it for the lifetime of the process.
+- Session is created asynchronously on mount (to support history loading).
 - Streaming is done in a Textual worker (background task) so the UI stays
   responsive while the model generates.
-- AssistantMessage is mounted empty and updated chunk-by-chunk via widget.append().
+- AssistantMessage is mounted empty and updated chunk-by-chunk.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ CSS_PATH = Path(__file__).parent / "app.tcss"
 
 WELCOME = """\
 **Minion** is ready. Type a message and press **Enter** to send.
-Press **Ctrl+Q** to quit.
+**Ctrl+N** new session  **Ctrl+Q** quit
 """
 
 
@@ -79,6 +79,7 @@ class MinionApp(App[None]):
 
     BINDINGS = [
         ("ctrl+q", "quit", "Quit"),
+        ("ctrl+n", "new_session", "New session"),
     ]
 
     def __init__(self, config: Config, memory: MemoryManager, search: SearchProvider) -> None:
@@ -87,7 +88,7 @@ class MinionApp(App[None]):
         self._memory = memory
         self._search = search
         self._agent = create_agent(config, memory)
-        self._session = Session(self._agent, memory, search)
+        self._session: Session | None = None
         self._busy = False
 
     # ── Layout ────────────────────────────────────────────────────────────
@@ -100,16 +101,61 @@ class MinionApp(App[None]):
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
     async def on_mount(self) -> None:
-        self._post_welcome()
+        self.query_one(StatusBar).set_status("loading...")
+        self._session = await Session.create(
+            self._agent, self._memory, self._search, resume=True
+        )
+        self._restore_or_welcome()
         self.query_one("#user-input", TextArea).focus()
-        await self._refresh_memory_count()
+        await self._refresh_status()
 
-    def _post_welcome(self) -> None:
-        self.query_one("#chat-history").mount(AssistantMessage(WELCOME))
+    def _restore_or_welcome(self) -> None:
+        """Show previous messages if resuming, otherwise show welcome."""
+        assert self._session is not None
+        history = self._session._history
+        if history:
+            self._render_history(history)
+        else:
+            self.query_one("#chat-history").mount(AssistantMessage(WELCOME))
 
-    async def _refresh_memory_count(self) -> None:
+    def _render_history(self, history: list) -> None:
+        """Re-render persisted messages into the chat pane."""
+        from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+
+        chat = self.query_one("#chat-history")
+        for msg in history:
+            if isinstance(msg, ModelRequest):
+                for part in msg.parts:
+                    if isinstance(part, UserPromptPart):
+                        chat.mount(UserMessage(part.content))
+            elif isinstance(msg, ModelResponse):
+                text = "".join(
+                    part.content for part in msg.parts if isinstance(part, TextPart)
+                )
+                if text:
+                    chat.mount(AssistantMessage(text))
+        chat.scroll_end(animate=False)
+
+    async def _refresh_status(self) -> None:
         count = await self._memory.count()
-        self.query_one(StatusBar).set_info(f"{count} memories")
+        session_id = self._session.session_id if self._session else "?"
+        self.query_one(StatusBar).set_info(f"{count} memories · session {session_id}")
+        self.query_one(StatusBar).set_status("ready")
+
+    # ── Actions ───────────────────────────────────────────────────────────
+
+    async def action_new_session(self) -> None:
+        """Start a fresh conversation session."""
+        if self._busy:
+            return
+        self._session = await Session.create(
+            self._agent, self._memory, self._search, resume=False
+        )
+        chat = self.query_one("#chat-history")
+        await chat.remove_children()
+        chat.mount(AssistantMessage(WELCOME))
+        await self._refresh_status()
+        self.query_one("#user-input", TextArea).focus()
 
     # ── Input handling ────────────────────────────────────────────────────
 
@@ -118,11 +164,12 @@ class MinionApp(App[None]):
         text = event.text_area.text
         if text.endswith("\n"):
             clean = text.rstrip("\n")
-            if clean.strip() and not self._busy:
+            if clean.strip() and not self._busy and self._session is not None:
                 event.text_area.clear()
                 self._submit(clean.strip())
 
     def _submit(self, text: str) -> None:
+        assert self._session is not None
         history = self.query_one("#chat-history")
         history.mount(UserMessage(text))
         response_widget = AssistantMessage()
@@ -136,13 +183,10 @@ class MinionApp(App[None]):
 
     @work(exclusive=True)
     async def _stream_response(self, text: str, widget: AssistantMessage) -> None:
+        assert self._session is not None
         try:
             async for event in self._session.stream(text):
                 if event.kind == "thinking":
-                    # Thinking block arrives complete in one chunk (PydanticAI
-                    # accumulates all thinking tokens before surfacing them).
-                    # Reveal it all at once — the status bar already showed
-                    # "thinking..." so the user knew something was happening.
                     widget.append_thinking(event.content)
                     self.query_one(StatusBar).set_status("responding...")
                 else:
@@ -153,6 +197,5 @@ class MinionApp(App[None]):
             widget.append_text(f"\n\n**Error:** {exc}")
         finally:
             self._busy = False
-            self.query_one(StatusBar).set_status("ready")
+            await self._refresh_status()
             self.query_one("#user-input", TextArea).focus()
-            await self._refresh_memory_count()

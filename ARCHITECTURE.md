@@ -98,7 +98,11 @@ Disabled by default (`MINION_ENABLE_SHELL=false`). When enabled:
 
 This is a safety net, not a sandbox. It prevents accidents, not determined misuse.
 
-Three-layer design:
+#### Git (`tools/git.py`)
+
+Thin wrappers over the `git` CLI via `asyncio.create_subprocess_exec`. Five tools: `git_status_tool`, `git_log_tool`, `git_diff_tool`, `git_branches_tool`, `git_commit_tool`. All accept an optional `cwd` so the agent can work on any repo. `git_commit_tool` uses the same dry-run confirm pattern as `write_file` and `run_shell`.
+
+#### Search (`tools/search.py`)
 - **`SearchResult`** — Pydantic model: `title`, `url`, `snippet`
 - **`SearchProvider`** — Protocol (interface) any provider must satisfy: `search(query, limit) -> list[SearchResult]`
 - **`DuckDuckGoProvider`** — Default implementation using the `ddgs` package. No API key. Runs the sync client in `asyncio.to_thread()` to avoid blocking the event loop.
@@ -111,7 +115,7 @@ The agent's `web_search` tool is only registered when `config.enable_web_search`
 | `web_search` | `tools/search.py` | done |
 | `read_file`, `write_file`, `list_directory` | `tools/filesystem.py` | done |
 | `run_shell` | `tools/shell.py` | done |
-| `git_status`, `git_log`, `git_diff` | `tools/git.py` | Milestone 5 |
+| `git_status_tool`, `git_log_tool`, `git_diff_tool`, `git_branches_tool`, `git_commit_tool` | `tools/git.py` | done |
 
 ### Config (`minion/config.py`)
 
@@ -122,9 +126,12 @@ The agent's `web_search` tool is only registered when `config.enable_web_search`
 ```
 ~/.minion/
 ├── .env          # local config (gitignored)
-├── minion.db     # SQLite: memories + session history
-└── logs/         # debug logs (optional)
+└── minion.db     # SQLite: memories + session history
 ```
+
+`minion.db` contains three sets of tables:
+- `memories` + `memories_fts` — the memory system
+- `sessions` + `session_messages` — conversation history, one snapshot per exchange
 
 ## Design Principles
 

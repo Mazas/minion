@@ -8,12 +8,14 @@ network calls are made — fast, deterministic, offline-safe.
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from minion.tools.filesystem import file_read, file_write, list_dir
+from minion.tools.git import git_branches, git_commit, git_diff, git_log, git_status
 from minion.tools.shell import BlockedCommandError, shell_exec, _check_blocklist
 from minion.tools.search import (
     DuckDuckGoProvider,
@@ -302,3 +304,142 @@ async def test_shell_exec_workdir(tmp_path: Path) -> None:
 async def test_shell_exec_stderr_captured() -> None:
     result = await shell_exec("echo error >&2")
     assert "error" in result
+
+
+# ── Git tools ─────────────────────────────────────────────────────────────────
+
+
+def _init_git_repo(path: Path) -> None:
+    """Create a minimal git repo with one commit for testing."""
+    subprocess.run(["git", "init", str(path)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.email", "test@test.com"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.name", "Test"], check=True, capture_output=True)
+    (path / "README.md").write_text("hello")
+    subprocess.run(["git", "-C", str(path), "add", "."], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(path), "commit", "-m", "init"], check=True, capture_output=True)
+
+
+@pytest.mark.asyncio
+async def test_git_status_clean_repo(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    result = await git_status(cwd=str(tmp_path))
+    assert "nothing to commit" in result or "working tree clean" in result
+
+
+@pytest.mark.asyncio
+async def test_git_status_dirty_repo(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "new_file.txt").write_text("untracked")
+    result = await git_status(cwd=str(tmp_path))
+    assert "new_file.txt" in result
+
+
+@pytest.mark.asyncio
+async def test_git_log_shows_commits(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    result = await git_log(cwd=str(tmp_path), limit=5)
+    assert "init" in result
+
+
+@pytest.mark.asyncio
+async def test_git_diff_no_changes(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    result = await git_diff(cwd=str(tmp_path))
+    # No changes — empty diff or no output
+    assert "$ git diff" in result
+
+
+@pytest.mark.asyncio
+async def test_git_diff_with_changes(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "README.md").write_text("modified content")
+    result = await git_diff(cwd=str(tmp_path))
+    assert "README.md" in result or "modified" in result
+
+
+@pytest.mark.asyncio
+async def test_git_branches_shows_branch(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    result = await git_branches(cwd=str(tmp_path))
+    # Should show master or main
+    assert "master" in result or "main" in result
+
+
+@pytest.mark.asyncio
+async def test_git_commit_dry_run(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "file.txt").write_text("content")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True, capture_output=True)
+    result = await git_commit("test commit", cwd=str(tmp_path), confirm=False)
+    assert "Dry run" in result
+    assert "test commit" in result
+    # File should still be staged, not committed
+    log = await git_log(cwd=str(tmp_path), limit=5)
+    assert "test commit" not in log
+
+
+@pytest.mark.asyncio
+async def test_git_commit_confirmed(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "file.txt").write_text("content")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True, capture_output=True)
+    result = await git_commit("my commit", cwd=str(tmp_path), confirm=True)
+    assert "my commit" in result or "master" in result or "main" in result
+    log = await git_log(cwd=str(tmp_path), limit=5)
+    assert "my commit" in log
+
+
+@pytest.mark.asyncio
+async def test_git_status_not_a_repo(tmp_path: Path) -> None:
+    result = await git_status(cwd=str(tmp_path))
+    assert "not a git repository" in result.lower() or "exit code" in result
+
+
+# ── History store ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_history_roundtrip(tmp_path: Path) -> None:
+    from minion.memory.manager import MemoryManager
+    from pydantic_ai.messages import ModelRequest, UserPromptPart, ModelResponse, TextPart
+
+    manager = MemoryManager(tmp_path / "test.db")
+
+    sid = await manager.create_session()
+    msgs = [
+        ModelRequest(parts=[UserPromptPart(content="hello")]),
+        ModelResponse(parts=[TextPart(content="hi there")], model_name="qwen3:8b"),
+    ]
+    await manager.save_messages(sid, msgs)
+    loaded = await manager.load_messages(sid)
+
+    assert len(loaded) == 2
+    assert loaded[0].parts[0].content == "hello"
+    assert loaded[1].parts[0].content == "hi there"
+    manager.close()
+
+
+@pytest.mark.asyncio
+async def test_history_latest_session(tmp_path: Path) -> None:
+    from minion.memory.manager import MemoryManager
+
+    manager = MemoryManager(tmp_path / "test.db")
+
+    assert await manager.get_latest_session_id() is None
+    sid1 = await manager.create_session()
+    sid2 = await manager.create_session()
+    latest = await manager.get_latest_session_id()
+    # Most recently created session should be latest
+    assert latest == sid2
+    manager.close()
+
+
+@pytest.mark.asyncio
+async def test_history_empty_session(tmp_path: Path) -> None:
+    from minion.memory.manager import MemoryManager
+
+    manager = MemoryManager(tmp_path / "test.db")
+    sid = await manager.create_session()
+    msgs = await manager.load_messages(sid)
+    assert msgs == []
+    manager.close()

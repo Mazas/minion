@@ -19,6 +19,7 @@ from minion.config import Config
 from minion.llm.providers import get_provider
 from minion.memory.manager import MemoryManager
 from minion.tools.filesystem import file_read, file_write, list_dir
+from minion.tools.git import git_branches, git_commit, git_diff, git_log, git_status
 from minion.tools.search import SearchProvider, format_results, get_search_provider
 from minion.tools.shell import BlockedCommandError, shell_exec
 
@@ -77,6 +78,17 @@ Shell access is powerful and potentially dangerous. Follow these rules strictly:
   explicit approval before calling with confirm=True.
 - Read-only commands (ls, cat, grep, git status, etc.) may run directly.
 - Never chain destructive commands with &&.
+
+## Git
+When working with git repositories:
+- Use `git_status` to see the current state before anything else.
+- Use `git_log` to show recent commits.
+- Use `git_diff` to show unstaged or staged changes.
+- Use `git_branches` to list branches.
+- Use `git_commit` with confirm=False first to preview, then confirm=True only
+  after the user explicitly approves the commit message and staged changes.
+- Never stage files or modify git config — only read state and commit what is
+  already staged.
 
 ## Tools
 Use tools when they genuinely help. Don't mention a tool by name to the user.
@@ -279,5 +291,85 @@ def create_agent(config: Config, memory: MemoryManager) -> Agent[AgentDeps, str]
                 return await shell_exec(command, workdir=workdir)
             except BlockedCommandError as e:
                 return f"Blocked: {e}"
+
+    # ── Git tools ─────────────────────────────────────────────────────────
+
+    if config.enable_git:
+
+        @agent.tool
+        async def git_status_tool(
+            ctx: RunContext[AgentDeps],
+            cwd: str | None = None,
+        ) -> str:
+            """
+            Show the working tree status of a git repository.
+
+            Args:
+                cwd: Path to the repo (defaults to current directory).
+            """
+            return await git_status(cwd=cwd)
+
+        @agent.tool
+        async def git_log_tool(
+            ctx: RunContext[AgentDeps],
+            cwd: str | None = None,
+            limit: int = 10,
+        ) -> str:
+            """
+            Show recent commit history (one line per commit).
+
+            Args:
+                cwd: Path to the repo (defaults to current directory).
+                limit: Number of commits to return (default 10).
+            """
+            return await git_log(cwd=cwd, limit=limit)
+
+        @agent.tool
+        async def git_diff_tool(
+            ctx: RunContext[AgentDeps],
+            cwd: str | None = None,
+            staged: bool = False,
+            path: str | None = None,
+        ) -> str:
+            """
+            Show changes in the working tree or staging area.
+
+            Args:
+                cwd: Path to the repo (defaults to current directory).
+                staged: If True, show staged changes instead of unstaged.
+                path: Limit diff to a specific file or directory.
+            """
+            return await git_diff(cwd=cwd, staged=staged, path=path)
+
+        @agent.tool
+        async def git_branches_tool(
+            ctx: RunContext[AgentDeps],
+            cwd: str | None = None,
+        ) -> str:
+            """
+            List local branches and show the current branch.
+
+            Args:
+                cwd: Path to the repo (defaults to current directory).
+            """
+            return await git_branches(cwd=cwd)
+
+        @agent.tool
+        async def git_commit_tool(
+            ctx: RunContext[AgentDeps],
+            message: str,
+            cwd: str | None = None,
+            confirm: bool = False,
+        ) -> str:
+            """
+            Commit staged changes. Always call with confirm=False first to
+            preview what will be committed, then confirm=True after approval.
+
+            Args:
+                message: Commit message.
+                cwd: Path to the repo (defaults to current directory).
+                confirm: Must be True to actually commit.
+            """
+            return await git_commit(message=message, cwd=cwd, confirm=confirm)
 
     return agent

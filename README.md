@@ -73,7 +73,17 @@ MINION_OLLAMA_BASE_URL=http://localhost:11434/v1
 MINION_DATA_DIR=~/.minion
 ```
 
-## Memory
+## Key bindings
+
+| Key | Action |
+|---|---|
+| `Enter` | Send message |
+| `Ctrl+N` | Start a new session |
+| `Ctrl+Q` | Quit |
+
+## Session history
+
+Minion automatically saves and restores conversation history. When you restart, your last session resumes where you left off. Start a fresh conversation with `Ctrl+N`.
 
 Minion remembers things about you across sessions. It stores four types of memories:
 
@@ -93,7 +103,7 @@ Memories are stored in `~/.minion/minion.db` — a plain SQLite file you can ins
 - [x] **Milestone 2** — Persistent memory (SQLite + FTS5)
 - [x] **Milestone 3** — Web search tool (DuckDuckGo)
 - [x] **Milestone 4** — Filesystem + shell tools
-- [ ] **Milestone 5** — Git tool + session history + TUI polish
+- [x] **Milestone 5** — Git tools + session history + TUI polish
 
 ## Data
 
